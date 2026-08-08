@@ -1,0 +1,10 @@
+/target/
+app/node_modules/
+app/build/
+app/.svelte-kit/
+app/package/
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
+*.db
+*.db-journal
+.DS_Store
