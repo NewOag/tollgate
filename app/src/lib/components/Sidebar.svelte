@@ -11,7 +11,7 @@
 </script>
 
 <nav class="sidebar">
-  <div class="brand">tollgate</div>
+  <div class="brand">Tollgate</div>
   <ul>
     {#each items as item (item.view)}
       <li>

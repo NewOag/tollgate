@@ -1,4 +1,4 @@
-# tollgate
+# Tollgate
 
 [English](README.md) | 中文
 

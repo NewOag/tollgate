@@ -8,6 +8,7 @@
   import Input from "../components/Input.svelte";
   import NumberInput from "../components/NumberInput.svelte";
   import Table from "../components/Table.svelte";
+  import ConfirmModal from "../components/ConfirmModal.svelte";
 
   function emptyPrice(): ModelPrice {
     return { input_per_mtok: 0, output_per_mtok: 0, cached_input_per_mtok: 0, cache_write_per_mtok: 0 };
@@ -18,6 +19,7 @@
 
   let newModel = $state("");
   let newPrice = $state<ModelPrice>(emptyPrice());
+  let confirmDelete = $state<string | null>(null);
 
   async function load() {
     try {
@@ -40,8 +42,14 @@
     }
   }
 
-  async function removeRow(model: string) {
-    if (!confirm(`Delete pricing for "${model}"?`)) return;
+  function removeRow(model: string) {
+    confirmDelete = model;
+  }
+
+  async function doDelete() {
+    const model = confirmDelete;
+    if (!model) return;
+    confirmDelete = null;
     try {
       await deletePricing(model);
       pushToast(`Deleted pricing for "${model}"`);
@@ -122,6 +130,15 @@
     </div>
   </Card>
 </div>
+
+{#if confirmDelete}
+  <ConfirmModal
+    title="Delete pricing"
+    message={`Delete pricing for "${confirmDelete}"?`}
+    onconfirm={doDelete}
+    oncancel={() => (confirmDelete = null)}
+  />
+{/if}
 
 <style>
   .pricing-page {

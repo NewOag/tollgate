@@ -55,7 +55,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: tollgate ${{ github.ref_name }}
+          releaseName: Tollgate ${{ github.ref_name }}
           releaseBody: |
             本地 LLM 网关桌面版 ${{ github.ref_name }}
 

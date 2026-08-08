@@ -53,7 +53,7 @@
   // default --config already resolves to the same file this app uses (both
   // use the OS-standard per-app config directory), so naming it here would
   // only invite hand-editing it directly instead of going through the CLI.
-  const aiPrompt = `You are managing a local LLM gateway called tollgate. Its config is a YAML file with routes (upstream + real/virtual API keys) and per-model pricing.
+  const aiPrompt = `You are managing a local LLM gateway called Tollgate. Its config is a YAML file with routes (upstream + real/virtual API keys) and per-model pricing.
 
 Do not hand-edit it — this desktop app rewrites the whole file on save, so hand-edits can be lost. Instead use the \`tollgate\` CLI, the same binary that runs the gateway: run it with no --config flag and it manages the same file this app uses.
 
@@ -76,7 +76,7 @@ Available commands:
   tollgate pricing remove --model <model>
 
 Each command validates before writing, so a bad edit won't corrupt the file. After changing the config:
-  - A standalone tollgate server process reloads automatically on SIGHUP.
+  - A standalone Tollgate server process reloads automatically on SIGHUP.
   - This desktop app does NOT watch the file — it must be quit and reopened for changes to take effect.
 
 Ask me what I want to add, change, or remove, then run the appropriate command(s).`;

@@ -8,12 +8,14 @@
   import Button from "../components/Button.svelte";
   import Badge from "../components/Badge.svelte";
   import RouteFormModal from "./RouteFormModal.svelte";
+  import ConfirmModal from "../components/ConfirmModal.svelte";
 
   let routes = $state<Route[]>([]);
   let expanded = $state<Set<string>>(new Set());
   let revealed = $state<Set<string>>(new Set());
   let showForm = $state(false);
   let editingRoute = $state<Route | null>(null);
+  let confirmDelete = $state<string | null>(null);
 
   async function load() {
     try {
@@ -59,8 +61,14 @@
     showForm = true;
   }
 
-  async function handleDelete(name: string) {
-    if (!confirm(`Delete route "${name}"? This cannot be undone.`)) return;
+  function handleDelete(name: string) {
+    confirmDelete = name;
+  }
+
+  async function doDelete() {
+    const name = confirmDelete;
+    if (!name) return;
+    confirmDelete = null;
     try {
       await deleteRoute(name);
       pushToast(`Deleted route "${name}"`);
@@ -169,6 +177,15 @@
     existingNames={routes.map((r) => r.name)}
     onclose={() => (showForm = false)}
     onsaved={handleSaved}
+  />
+{/if}
+
+{#if confirmDelete}
+  <ConfirmModal
+    title="Delete route"
+    message={`Delete route "${confirmDelete}"? This cannot be undone.`}
+    onconfirm={doDelete}
+    oncancel={() => (confirmDelete = null)}
   />
 {/if}
 
