@@ -1,5 +1,7 @@
 # tollgate
 
+English | [中文](README.zh-CN.md)
+
 A local LLM gateway: sits in front of your OpenAI/Anthropic-compatible client
 SDKs, forwards requests to the real upstream unmodified, and logs
 usage/latency/cost/full request-response content to a local SQLite file.
