@@ -1,20 +1,44 @@
 <script lang="ts">
-  import { getStats, getTimeSeries } from "../api";
-  import type { StatRow, TimeSeriesResult } from "../types";
-  import { formatCost, formatTokens, formatLatency, formatPercent } from "../format";
+  import { onMount } from "svelte";
+  import { getConfig, getStats, getTimeSeries } from "../api";
+  import type { Route, StatRow, TimeSeriesResult } from "../types";
+  import { formatCost, formatTokens, formatPercent } from "../format";
   import { pushToast } from "../toast";
   import { defaultRange, previousEqualRange } from "../timeRange";
   import TimeRangePicker from "../components/TimeRangePicker.svelte";
+  import RefreshControl from "../components/RefreshControl.svelte";
   import StatCard from "../components/StatCard.svelte";
   import Card from "../components/Card.svelte";
   import LineChart from "../components/LineChart.svelte";
-  import Table from "../components/Table.svelte";
+  import StatBreakdownTable from "../components/StatBreakdownTable.svelte";
 
   let range = $state(defaultRange());
   let rows = $state<StatRow[]>([]);
   let prevRows = $state<StatRow[]>([]);
+  let vkRows = $state<StatRow[]>([]);
   let costSeries = $state<TimeSeriesResult>({ buckets: [], series: {} });
   let countSeries = $state<TimeSeriesResult>({ buckets: [], series: {} });
+  let routes = $state<Route[]>([]);
+
+  onMount(async () => {
+    try {
+      routes = (await getConfig()).routes;
+    } catch (e) {
+      pushToast(`Failed to load config: ${e}`, "danger");
+    }
+  });
+
+  // `group` for virtual_key rows is the key's stable value, which may
+  // have been renamed since the request was logged — resolve against the
+  // current config first, falling back to the frozen historical label
+  // (`group_label`) if the key was since deleted or config hasn't loaded.
+  function resolveVirtualKeyLabel(row: StatRow): string {
+    for (const r of routes) {
+      const k = r.keys.find((k) => k.value === row.group);
+      if (k) return k.label || r.name;
+    }
+    return row.group_label || row.group;
+  }
 
   function sumRows(list: StatRow[]) {
     return list.reduce(
@@ -39,39 +63,48 @@
     return ((current - previous) / previous) * 100;
   }
 
-  const sortedRows = $derived([...rows].sort((a, b) => b.total_cost_usd - a.total_cost_usd));
+  let loading = $state(false);
+  let statsSeq = 0;
+
+  async function loadStats() {
+    const seq = ++statsSeq;
+    const r = range;
+    loading = true;
+    try {
+      const prev = previousEqualRange(r);
+      const [current, previous, cost, count, byVirtualKey] = await Promise.all([
+        getStats(r.since, r.until, "model"),
+        getStats(prev.since, prev.until, "model"),
+        getTimeSeries(r.since, r.until, "model", "cost_usd"),
+        getTimeSeries(r.since, r.until, "model", "count"),
+        getStats(r.since, r.until, "virtual_key"),
+      ]);
+      if (seq !== statsSeq) return;
+      rows = current;
+      prevRows = previous;
+      costSeries = cost;
+      countSeries = count;
+      vkRows = byVirtualKey;
+    } catch (e) {
+      if (seq === statsSeq) pushToast(`Failed to load stats: ${e}`, "danger");
+    } finally {
+      if (seq === statsSeq) loading = false;
+    }
+  }
 
   $effect(() => {
-    const r = range;
-    let cancelled = false;
-    (async () => {
-      try {
-        const prev = previousEqualRange(r);
-        const [current, previous, cost, count] = await Promise.all([
-          getStats(r.since, r.until, "model"),
-          getStats(prev.since, prev.until, "model"),
-          getTimeSeries(r.since, r.until, "model", "cost_usd"),
-          getTimeSeries(r.since, r.until, "model", "count"),
-        ]);
-        if (cancelled) return;
-        rows = current;
-        prevRows = previous;
-        costSeries = cost;
-        countSeries = count;
-      } catch (e) {
-        if (!cancelled) pushToast(`Failed to load stats: ${e}`, "danger");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void range;
+    loadStats();
   });
 </script>
 
 <div class="dashboard">
   <div class="toolbar">
     <h2>Dashboard</h2>
-    <TimeRangePicker bind:value={range} />
+    <div class="toolbar-controls">
+      <RefreshControl onRefresh={loadStats} loading={loading} />
+      <TimeRangePicker bind:value={range} />
+    </div>
   </div>
 
   <div class="stat-grid">
@@ -99,35 +132,11 @@
   </div>
 
   <Card title="By model">
-    <Table>
-      <thead>
-        <tr>
-          <th>Model</th>
-          <th>Count</th>
-          <th>Tokens</th>
-          <th>Cache hit</th>
-          <th>Avg latency</th>
-          <th>Errors</th>
-          <th>Cost</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each sortedRows as row (row.group)}
-          <tr>
-            <td>{row.group}</td>
-            <td class="num">{row.count}</td>
-            <td class="num">{formatTokens(row.total_tokens)}</td>
-            <td class="num">{formatPercent(row.cache_hit_rate)}</td>
-            <td class="num">{formatLatency(row.avg_latency_ms)}</td>
-            <td class="num">{row.errors}</td>
-            <td class="num">{formatCost(row.total_cost_usd)}</td>
-          </tr>
-        {/each}
-        {#if sortedRows.length === 0}
-          <tr><td colspan="7" class="empty">No data for this window</td></tr>
-        {/if}
-      </tbody>
-    </Table>
+    <StatBreakdownTable groupLabel="Model" rows={rows} />
+  </Card>
+
+  <Card title="By virtual key">
+    <StatBreakdownTable groupLabel="Virtual key" rows={vkRows} resolveDisplayLabel={resolveVirtualKeyLabel} />
   </Card>
 </div>
 
@@ -149,6 +158,12 @@
     font-weight: 600;
   }
 
+  .toolbar-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
   .stat-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -159,11 +174,5 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-4);
-  }
-
-  .empty {
-    text-align: center;
-    color: var(--text-muted);
-    padding: var(--space-4);
   }
 </style>

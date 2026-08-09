@@ -13,7 +13,9 @@
   import { pushToast } from "../toast";
   import { defaultRange } from "../timeRange";
   import { highlightJson } from "../jsonHighlight";
+  import { extractStreamText } from "../streamFormat";
   import TimeRangePicker from "../components/TimeRangePicker.svelte";
+  import RefreshControl from "../components/RefreshControl.svelte";
   import Dropdown from "../components/Dropdown.svelte";
   import Button from "../components/Button.svelte";
   import Badge from "../components/Badge.svelte";
@@ -103,7 +105,11 @@
     page = 0;
   });
 
-  $effect(() => {
+  let requestsLoading = $state(false);
+  let requestsSeq = 0;
+
+  async function loadRequests() {
+    const seq = ++requestsSeq;
     const args = {
       since: range.since,
       until: range.until,
@@ -114,20 +120,27 @@
       limit,
       offset: page * limit,
     };
-    let cancelled = false;
-    (async () => {
-      try {
-        const [list, count] = await listRequests(args);
-        if (cancelled) return;
-        rows = list;
-        total = count;
-      } catch (e) {
-        if (!cancelled) pushToast(`Failed to load requests: ${e}`, "danger");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    requestsLoading = true;
+    try {
+      const [list, count] = await listRequests(args);
+      if (seq !== requestsSeq) return;
+      rows = list;
+      total = count;
+    } catch (e) {
+      if (seq === requestsSeq) pushToast(`Failed to load requests: ${e}`, "danger");
+    } finally {
+      if (seq === requestsSeq) requestsLoading = false;
+    }
+  }
+
+  $effect(() => {
+    void range;
+    void routeFilter;
+    void modelFilter;
+    void vkFilter;
+    void sessionFilter;
+    void page;
+    loadRequests();
   });
 
   async function openDetail(id: number) {
@@ -149,8 +162,30 @@
     rawView = false;
   }
 
+  const selectedIndex = $derived(selectedId === null ? -1 : rows.findIndex((r) => r.id === selectedId));
+  const canGoPrev = $derived(selectedIndex > 0);
+  const canGoNext = $derived(selectedIndex >= 0 && selectedIndex < rows.length - 1);
+
+  function selectByOffset(delta: number) {
+    const target = rows[selectedIndex + delta];
+    if (target) openDetail(target.id);
+  }
+
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") closeDetail();
+    if (e.key === "Escape") {
+      closeDetail();
+      return;
+    }
+    if (selectedId === null) return;
+    const target = e.target as HTMLElement;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      selectByOffset(-1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectByOffset(1);
+    }
   }
 
   const pageCount = $derived(Math.max(1, Math.ceil(total / limit)));
@@ -176,6 +211,15 @@
   const cacheHitRate = $derived(
     detail && detail.prompt_tokens > 0 ? detail.cache_read_tokens / detail.prompt_tokens : 0,
   );
+
+  // Streamed responses are stored as raw SSE frames (`data: {...}` per
+  // chunk); the formatted view assembles them into the actual completion
+  // text instead of dumping each chunk. Falls back to the raw body (via
+  // highlightJson's non-JSON path) when extraction finds nothing.
+  const streamedResponseText = $derived.by(() => {
+    if (!detail || !detail.stream) return null;
+    return extractStreamText(detail.response_body, detail.format);
+  });
 </script>
 
 <svelte:window onkeydown={onKeydown} onmousemove={onDragMove} onmouseup={stopResize} />
@@ -183,7 +227,10 @@
 <div class="requests">
   <div class="toolbar">
     <h2>Requests</h2>
-    <TimeRangePicker bind:value={range} />
+    <div class="toolbar-controls">
+      <RefreshControl onRefresh={loadRequests} loading={requestsLoading} />
+      <TimeRangePicker bind:value={range} />
+    </div>
   </div>
 
   <div class="filters">
@@ -222,15 +269,15 @@
           <th>Route</th>
           <th>Model</th>
           <th>Status</th>
-          <th>Latency</th>
-          <th>Tokens</th>
-          <th>Cost</th>
+          <th class="num">Latency</th>
+          <th class="num">Tokens</th>
+          <th class="num">Cost</th>
         </tr>
       </thead>
       <tbody>
         {#each rows as r (r.id)}
           <tr class="clickable" onclick={() => openDetail(r.id)}>
-            <td class="num">{formatTimestamp(r.timestamp)}</td>
+            <td class="time-cell">{formatTimestamp(r.timestamp)}</td>
             <td>{r.route}</td>
             <td>{r.model}</td>
             <td><Badge variant={statusVariant(r.status_code)}>{r.status_code}</Badge></td>
@@ -260,6 +307,8 @@
     <div class="drawer-header">
       <h3>Request #{selectedId}</h3>
       <div class="header-actions">
+        <button class="nav-btn" disabled={!canGoPrev} onclick={() => selectByOffset(-1)} aria-label="Previous request" title="Previous (↑)">↑</button>
+        <button class="nav-btn" disabled={!canGoNext} onclick={() => selectByOffset(1)} aria-label="Next request" title="Next (↓)">↓</button>
         {#if detail}
           <button class="link" onclick={() => (rawView = !rawView)}>{rawView ? "Formatted" : "Raw HTTP"}</button>
         {/if}
@@ -320,8 +369,17 @@
           <pre>{@html highlightJson(rawView ? `${detail.request_headers}\n${detail.request_body}` : detail.request_body)}</pre>
         </div>
         <div class="body-block">
-          <h4>Response {rawView ? "(raw HTTP)" : "body"}</h4>
-          <pre>{@html highlightJson(rawView ? `${detail.response_headers}\n${detail.response_body}` : detail.response_body)}</pre>
+          <h4>
+            Response {rawView ? "(raw HTTP)" : "body"}
+            {#if !rawView && streamedResponseText !== null}
+              <span class="stream-note">(assembled from stream)</span>
+            {/if}
+          </h4>
+          {#if !rawView && streamedResponseText !== null}
+            <pre>{streamedResponseText}</pre>
+          {:else}
+            <pre>{@html highlightJson(rawView ? `${detail.response_headers}\n${detail.response_body}` : detail.response_body)}</pre>
+          {/if}
         </div>
       {:else}
         <p class="placeholder">Not found.</p>
@@ -348,6 +406,12 @@
     font-weight: 600;
   }
 
+  .toolbar-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
   .filters {
     display: flex;
     gap: var(--space-4);
@@ -370,6 +434,11 @@
 
   .clickable {
     cursor: pointer;
+  }
+
+  .time-cell {
+    font-family: var(--font-mono);
+    white-space: nowrap;
   }
 
   .empty {
@@ -463,6 +532,33 @@
     color: var(--text);
   }
 
+  .nav-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-control);
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  .nav-btn:not(:disabled):hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+
+  .nav-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
   .link {
     background: none;
     border: none;
@@ -526,6 +622,12 @@
     text-transform: uppercase;
     letter-spacing: 0.03em;
     margin-bottom: var(--space-2);
+  }
+
+  .stream-note {
+    text-transform: none;
+    font-weight: 400;
+    letter-spacing: normal;
   }
 
   .body-block pre {

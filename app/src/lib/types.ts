@@ -50,7 +50,13 @@ export interface TimeRange {
 }
 
 export interface StatRow {
+  // For virtual_key grouping this is the key's stable *value*, not its
+  // label (so a renamed key's old/new rows merge into one group) — use
+  // `group_label` for display, resolving it against the current config
+  // first and falling back to this snapshot label if the key was deleted.
+  // For every other group_by, this already *is* the display label.
   group: string;
+  group_label: string;
   count: number;
   prompt_tokens: number;
   completion_tokens: number;

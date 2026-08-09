@@ -37,6 +37,16 @@
     white-space: nowrap;
   }
 
+  /* Right-align numeric column headers to match the `.num` cells below
+     them (app.css) — without this, headers stay left-aligned while their
+     numbers sit right-aligned underneath. Overrides `.num`'s monospace
+     font back to the UI font so header labels stay consistent with the
+     text columns' headers. */
+  .table :global(th.num) {
+    text-align: right;
+    font-family: var(--font-ui);
+  }
+
   .table :global(td) {
     padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);

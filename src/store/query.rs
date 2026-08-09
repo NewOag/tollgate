@@ -24,7 +24,17 @@ pub enum StoreError {
 /// One aggregated row grouped by model/route/virtual_key/real_key.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StatRow {
+    /// The stable grouping key: the column value itself for
+    /// model/route/real_key, or the virtual key's *value* (not its label)
+    /// for virtual_key — so renaming a key merges its old and new rows
+    /// into one group instead of splitting them.
     pub group: String,
+    /// Human-readable display label for `group`. Identical to `group` for
+    /// model/route/real_key. For virtual_key, this is the most recent
+    /// `virtual_key_label` snapshot seen for that key value — callers
+    /// should prefer resolving `group` against the *current* config and
+    /// only fall back to this (e.g. the key was since deleted).
+    pub group_label: String,
     pub count: i64,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
@@ -42,12 +52,14 @@ pub struct StatRow {
 }
 
 /// Maps a group-by value to its backing SQL column, shared by
-/// [`stats`] and [`time_series`] so the two stay in sync.
+/// [`stats`] and [`time_series`] so the two stay in sync. `virtual_key`
+/// groups by the key's stable *value* rather than its (renameable)
+/// label — see [`StatRow::group_label`].
 pub fn group_by_column(group_by: &str) -> Result<&'static str, StoreError> {
     match group_by {
         "model" => Ok("model"),
         "route" => Ok("route"),
-        "virtual_key" => Ok("virtual_key_label"),
+        "virtual_key" => Ok("virtual_key_value"),
         "real_key" => Ok("real_key_label"),
         other => Err(StoreError::InvalidGroupBy(other.to_string())),
     }
@@ -58,10 +70,23 @@ pub fn group_by_column(group_by: &str) -> Result<&'static str, StoreError> {
 /// "real_key".
 pub fn stats(conn: &Connection, group_by: &str, since: DateTime<Utc>, until: Option<DateTime<Utc>>) -> Result<Vec<StatRow>, StoreError> {
     let col = group_by_column(group_by)?;
+    // Only virtual_key groups by an identifier distinct from its display
+    // label (see `group_by_column`) — everyone else's label is just the
+    // grouping column itself. The correlated subquery picks the label
+    // from that group's most recently logged row, so a renamed key's
+    // rows still show *some* label even before the caller resolves
+    // `group` against the current config (or the key was since deleted,
+    // in which case this snapshot is the only label left).
+    let label_expr = if group_by == "virtual_key" {
+        "(SELECT r2.virtual_key_label FROM requests r2 WHERE r2.virtual_key_value = r1.virtual_key_value ORDER BY r2.ts DESC LIMIT 1)".to_string()
+    } else {
+        format!("r1.{col}")
+    };
     let until_clause = if until.is_some() { "AND ts <= ?2" } else { "" };
     let query = format!(
         "SELECT
-            {col} AS grp,
+            r1.{col} AS grp,
+            {label_expr} AS grp_label,
             COUNT(*) AS count,
             SUM(prompt_tokens),
             SUM(completion_tokens),
@@ -71,9 +96,9 @@ pub fn stats(conn: &Connection, group_by: &str, since: DateTime<Utc>, until: Opt
             AVG(latency_ms),
             SUM(CASE WHEN status_code >= 400 OR status_code = 0 THEN 1 ELSE 0 END),
             SUM(cost_usd)
-        FROM requests
+        FROM requests r1
         WHERE ts >= ?1 {until_clause}
-        GROUP BY {col}
+        GROUP BY r1.{col}
         ORDER BY count DESC"
     );
 
@@ -87,15 +112,16 @@ pub fn stats(conn: &Connection, group_by: &str, since: DateTime<Utc>, until: Opt
     while let Some(row) = rows.next()? {
         let mut r = StatRow {
             group: row.get(0)?,
-            count: row.get(1)?,
-            prompt_tokens: row.get(2)?,
-            completion_tokens: row.get(3)?,
-            total_tokens: row.get(4)?,
-            cache_creation_tokens: row.get(5)?,
-            cache_read_tokens: row.get(6)?,
-            avg_latency_ms: row.get(7)?,
-            errors: row.get(8)?,
-            total_cost_usd: row.get(9)?,
+            group_label: row.get(1)?,
+            count: row.get(2)?,
+            prompt_tokens: row.get(3)?,
+            completion_tokens: row.get(4)?,
+            total_tokens: row.get(5)?,
+            cache_creation_tokens: row.get(6)?,
+            cache_read_tokens: row.get(7)?,
+            avg_latency_ms: row.get(8)?,
+            errors: row.get(9)?,
+            total_cost_usd: row.get(10)?,
             cache_hit_rate: 0.0,
         };
         if r.prompt_tokens > 0 {
@@ -247,6 +273,36 @@ mod tests {
 
         let claude = rows.iter().find(|r| r.group == "claude").unwrap();
         assert_eq!(claude.errors, 1);
+    }
+
+    #[test]
+    fn stats_groups_virtual_key_by_value_and_merges_renamed_labels() {
+        let conn = setup();
+        let now = Utc::now();
+        let mut before_rename = record("gpt-4o", now - TimeDelta::hours(2), 200, 0.01);
+        before_rename.virtual_key_value = "vk-abc".to_string();
+        before_rename.virtual_key_label = "old-name".to_string();
+        insert_record(&conn, &before_rename).unwrap();
+
+        let mut after_rename = record("gpt-4o", now, 200, 0.02);
+        after_rename.virtual_key_value = "vk-abc".to_string();
+        after_rename.virtual_key_label = "new-name".to_string();
+        insert_record(&conn, &after_rename).unwrap();
+
+        let mut other_key = record("gpt-4o", now, 200, 0.05);
+        other_key.virtual_key_value = "vk-xyz".to_string();
+        other_key.virtual_key_label = "other".to_string();
+        insert_record(&conn, &other_key).unwrap();
+
+        let rows = stats(&conn, "virtual_key", now - TimeDelta::hours(3), None).unwrap();
+
+        let merged = rows.iter().find(|r| r.group == "vk-abc").unwrap();
+        assert_eq!(merged.count, 2);
+        assert!((merged.total_cost_usd - 0.03).abs() < 1e-9);
+        assert_eq!(merged.group_label, "new-name");
+
+        let other = rows.iter().find(|r| r.group == "vk-xyz").unwrap();
+        assert_eq!(other.group_label, "other");
     }
 
     #[test]
