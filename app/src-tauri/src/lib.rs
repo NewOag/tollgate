@@ -101,6 +101,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { api, .. } => {
                 tray::handle_exit_requested(app_handle, &api);
             }
+            #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { has_visible_windows, .. } => {
                 if !has_visible_windows {
                     tray::show_main_window(app_handle);
