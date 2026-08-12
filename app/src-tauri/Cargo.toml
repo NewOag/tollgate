@@ -1,6 +1,6 @@
 [package]
 name = "tollgate-app"
-version = "0.1.4"
+version = "0.1.5"
 description = "tollgate desktop app"
 authors = ["you"]
 edition = "2021"
