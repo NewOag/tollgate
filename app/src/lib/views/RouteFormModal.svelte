@@ -122,6 +122,12 @@
       <h4>Real keys</h4>
       <Button variant="ghost" onclick={addRealKey}>+ Add</Button>
     </div>
+    {#if realKeys.length > 0}
+      <div class="key-editor-columns">
+        <span>Label</span>
+        <span>Secret value</span>
+      </div>
+    {/if}
     {#each realKeys as rk, i (i)}
       <div class="key-editor-row">
         <Input bind:value={rk.label} placeholder="label" />
@@ -137,6 +143,13 @@
       <h4>Virtual keys</h4>
       <Button variant="ghost" onclick={addVirtualKey}>+ Add</Button>
     </div>
+    {#if virtualKeys.length > 0}
+      <div class="key-editor-columns virtual">
+        <span>Label</span>
+        <span>Real key</span>
+        <span>Secret value</span>
+      </div>
+    {/if}
     {#each virtualKeys as vk, i (i)}
       <div class="key-editor-row virtual">
         <Input bind:value={vk.label} placeholder="label" />
@@ -198,6 +211,24 @@
   .key-editor-header h4 {
     font-size: 12px;
     font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .key-editor-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto auto;
+    gap: var(--space-2);
+  }
+
+  .key-editor-columns.virtual {
+    grid-template-columns: 1fr 1fr 1fr auto auto;
+  }
+
+  .key-editor-columns span {
+    font-size: 11px;
+    font-weight: 500;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.03em;

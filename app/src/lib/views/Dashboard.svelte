@@ -4,7 +4,7 @@
   import type { Route, StatRow, TimeSeriesResult } from "../types";
   import { formatCost, formatTokens, formatPercent } from "../format";
   import { pushToast } from "../toast";
-  import { defaultRange, previousEqualRange } from "../timeRange";
+  import { defaultRange, previousEqualRange, refreshRange } from "../timeRange";
   import TimeRangePicker from "../components/TimeRangePicker.svelte";
   import RefreshControl from "../components/RefreshControl.svelte";
   import StatCard from "../components/StatCard.svelte";
@@ -96,13 +96,19 @@
     void range;
     loadStats();
   });
+
+  function refresh() {
+    const next = refreshRange(range);
+    if (next === range) loadStats();
+    else range = next;
+  }
 </script>
 
 <div class="dashboard">
   <div class="toolbar">
     <h2>Dashboard</h2>
     <div class="toolbar-controls">
-      <RefreshControl onRefresh={loadStats} loading={loading} />
+      <RefreshControl onRefresh={refresh} loading={loading} />
       <TimeRangePicker bind:value={range} />
     </div>
   </div>

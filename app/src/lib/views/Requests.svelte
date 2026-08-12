@@ -11,7 +11,7 @@
   import type { Route, RequestSummary, RequestRecord } from "../types";
   import { formatCost, formatTokens, formatLatency, formatTimestamp, formatPercent, statusVariant, formatVariant } from "../format";
   import { pushToast } from "../toast";
-  import { defaultRange } from "../timeRange";
+  import { defaultRange, refreshRange } from "../timeRange";
   import { highlightJson } from "../jsonHighlight";
   import { extractStreamText } from "../streamFormat";
   import TimeRangePicker from "../components/TimeRangePicker.svelte";
@@ -143,6 +143,12 @@
     loadRequests();
   });
 
+  function refresh() {
+    const next = refreshRange(range);
+    if (next === range) loadRequests();
+    else range = next;
+  }
+
   async function openDetail(id: number) {
     selectedId = id;
     detail = null;
@@ -228,7 +234,7 @@
   <div class="toolbar">
     <h2>Requests</h2>
     <div class="toolbar-controls">
-      <RefreshControl onRefresh={loadRequests} loading={requestsLoading} />
+      <RefreshControl onRefresh={refresh} loading={requestsLoading} />
       <TimeRangePicker bind:value={range} />
     </div>
   </div>
