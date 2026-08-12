@@ -1,23 +1,13 @@
 <script lang="ts">
   import type { TimeRange } from "../types";
-  import { PRESETS, presetRange } from "../timeRange";
+  import { PRESETS, presetRangeForKey } from "../timeRange";
 
   interface Props {
     value: TimeRange;
+    activeKey: string;
   }
 
-  let { value = $bindable() }: Props = $props();
-
-  function matchingPreset(v: TimeRange): string | null {
-    const now = Date.now();
-    const untilMs = new Date(v.until).getTime();
-    if (Math.abs(now - untilMs) > 5000) return null;
-    const sinceMs = new Date(v.since).getTime();
-    for (const p of PRESETS) {
-      if (Math.abs(now - p.ms - sinceMs) < 5000) return p.key;
-    }
-    return null;
-  }
+  let { value = $bindable(), activeKey = $bindable() }: Props = $props();
 
   function toLocalInput(iso: string): string {
     const d = new Date(iso);
@@ -25,15 +15,14 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
-  let activeKey = $state(matchingPreset(value) ?? "custom");
   let customOpen = $state(activeKey === "custom");
   let customSince = $state(toLocalInput(value.since));
   let customUntil = $state(toLocalInput(value.until));
 
-  function pickPreset(key: string, ms: number) {
+  function pickPreset(key: string) {
     activeKey = key;
     customOpen = false;
-    value = presetRange(ms);
+    value = presetRangeForKey(key);
   }
 
   function openCustom() {
@@ -52,7 +41,7 @@
 <div class="time-range">
   <div class="presets">
     {#each PRESETS as p (p.key)}
-      <button type="button" class="pill" class:active={activeKey === p.key} onclick={() => pickPreset(p.key, p.ms)}>
+      <button type="button" class="pill" class:active={activeKey === p.key} onclick={() => pickPreset(p.key)}>
         {p.label}
       </button>
     {/each}
@@ -79,6 +68,8 @@
 
   .presets {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: var(--space-1);
   }
 

@@ -1,29 +1,42 @@
 import type { TimeRange } from "./types";
 
-export const PRESETS: { key: string; label: string; ms: number }[] = [
-  { key: "1h", label: "Last hour", ms: 3600_000 },
-  { key: "24h", label: "Last 24 hours", ms: 24 * 3600_000 },
-  { key: "7d", label: "Last 7 days", ms: 7 * 24 * 3600_000 },
-  { key: "30d", label: "Last 30 days", ms: 30 * 24 * 3600_000 },
+export interface Preset {
+  key: string;
+  label: string;
+  since: (now: Date) => Date;
+}
+
+function startOfDay(now: Date): Date {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function startOfWeek(now: Date): Date {
+  const d = startOfDay(now);
+  const daysSinceMonday = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - daysSinceMonday);
+  return d;
+}
+
+export const PRESETS: Preset[] = [
+  { key: "today", label: "Today", since: startOfDay },
+  { key: "week", label: "This week", since: startOfWeek },
+  { key: "1h", label: "Last hour", since: (now) => new Date(now.getTime() - 3600_000) },
+  { key: "24h", label: "Last 24 hours", since: (now) => new Date(now.getTime() - 24 * 3600_000) },
+  { key: "7d", label: "Last 7 days", since: (now) => new Date(now.getTime() - 7 * 24 * 3600_000) },
+  { key: "30d", label: "Last 30 days", since: (now) => new Date(now.getTime() - 30 * 24 * 3600_000) },
 ];
 
-export function presetRange(ms: number, now: Date = new Date()): TimeRange {
-  return { since: new Date(now.getTime() - ms).toISOString(), until: now.toISOString() };
+export const DEFAULT_PRESET_KEY = "24h";
+
+export function presetRangeForKey(key: string, now: Date = new Date()): TimeRange {
+  const preset = PRESETS.find((p) => p.key === key) ?? PRESETS.find((p) => p.key === DEFAULT_PRESET_KEY)!;
+  return { since: preset.since(now).toISOString(), until: now.toISOString() };
 }
 
 export function defaultRange(): TimeRange {
-  return presetRange(PRESETS[1].ms);
-}
-
-// If `range` looks like a rolling preset window (its span matches one of
-// PRESETS), re-anchor it to now so a manual refresh actually picks up
-// data logged since the window was first computed. Custom ranges (span
-// doesn't match a preset) are returned unchanged — the user fixed those
-// boundaries on purpose.
-export function refreshRange(range: TimeRange): TimeRange {
-  const span = new Date(range.until).getTime() - new Date(range.since).getTime();
-  const preset = PRESETS.find((p) => Math.abs(p.ms - span) < 1000);
-  return preset ? presetRange(preset.ms) : range;
+  return presetRangeForKey(DEFAULT_PRESET_KEY);
 }
 
 // The equal-length window immediately preceding `range`, for

@@ -4,7 +4,8 @@
   import type { Route, StatRow, TimeSeriesResult } from "../types";
   import { formatCost, formatTokens, formatPercent } from "../format";
   import { pushToast } from "../toast";
-  import { defaultRange, previousEqualRange, refreshRange } from "../timeRange";
+  import { previousEqualRange, presetRangeForKey } from "../timeRange";
+  import { dashboardFilters as filters } from "../filterState.svelte";
   import TimeRangePicker from "../components/TimeRangePicker.svelte";
   import RefreshControl from "../components/RefreshControl.svelte";
   import StatCard from "../components/StatCard.svelte";
@@ -12,7 +13,6 @@
   import LineChart from "../components/LineChart.svelte";
   import StatBreakdownTable from "../components/StatBreakdownTable.svelte";
 
-  let range = $state(defaultRange());
   let rows = $state<StatRow[]>([]);
   let prevRows = $state<StatRow[]>([]);
   let vkRows = $state<StatRow[]>([]);
@@ -68,7 +68,7 @@
 
   async function loadStats() {
     const seq = ++statsSeq;
-    const r = range;
+    const r = filters.range;
     loading = true;
     try {
       const prev = previousEqualRange(r);
@@ -93,14 +93,13 @@
   }
 
   $effect(() => {
-    void range;
+    void filters.range;
     loadStats();
   });
 
   function refresh() {
-    const next = refreshRange(range);
-    if (next === range) loadStats();
-    else range = next;
+    if (filters.activePresetKey === "custom") loadStats();
+    else filters.range = presetRangeForKey(filters.activePresetKey);
   }
 </script>
 
@@ -109,7 +108,7 @@
     <h2>Dashboard</h2>
     <div class="toolbar-controls">
       <RefreshControl onRefresh={refresh} loading={loading} />
-      <TimeRangePicker bind:value={range} />
+      <TimeRangePicker bind:value={filters.range} bind:activeKey={filters.activePresetKey} />
     </div>
   </div>
 

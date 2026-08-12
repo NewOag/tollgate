@@ -11,7 +11,8 @@
   import type { Route, RequestSummary, RequestRecord } from "../types";
   import { formatCost, formatTokens, formatLatency, formatTimestamp, formatPercent, statusVariant, formatVariant } from "../format";
   import { pushToast } from "../toast";
-  import { defaultRange, refreshRange } from "../timeRange";
+  import { presetRangeForKey } from "../timeRange";
+  import { requestsFilters as filters } from "../filterState.svelte";
   import { highlightJson } from "../jsonHighlight";
   import { extractStreamText } from "../streamFormat";
   import TimeRangePicker from "../components/TimeRangePicker.svelte";
@@ -23,13 +24,6 @@
   import Table from "../components/Table.svelte";
 
   const limit = 25;
-
-  let range = $state(defaultRange());
-  let routeFilter = $state("");
-  let modelFilter = $state("");
-  let vkFilter = $state("");
-  let sessionFilter = $state("");
-  let page = $state(0);
 
   let routes = $state<Route[]>([]);
   let models = $state<string[]>([]);
@@ -97,12 +91,12 @@
   });
 
   $effect(() => {
-    void range;
-    void routeFilter;
-    void modelFilter;
-    void vkFilter;
-    void sessionFilter;
-    page = 0;
+    void filters.range;
+    void filters.routeFilter;
+    void filters.modelFilter;
+    void filters.vkFilter;
+    void filters.sessionFilter;
+    filters.page = 0;
   });
 
   let requestsLoading = $state(false);
@@ -111,14 +105,14 @@
   async function loadRequests() {
     const seq = ++requestsSeq;
     const args = {
-      since: range.since,
-      until: range.until,
-      route: routeFilter || undefined,
-      model: modelFilter || undefined,
-      virtual_key_label: vkFilter || undefined,
-      session_id: sessionFilter || undefined,
+      since: filters.range.since,
+      until: filters.range.until,
+      route: filters.routeFilter || undefined,
+      model: filters.modelFilter || undefined,
+      virtual_key_label: filters.vkFilter || undefined,
+      session_id: filters.sessionFilter || undefined,
       limit,
-      offset: page * limit,
+      offset: filters.page * limit,
     };
     requestsLoading = true;
     try {
@@ -134,19 +128,18 @@
   }
 
   $effect(() => {
-    void range;
-    void routeFilter;
-    void modelFilter;
-    void vkFilter;
-    void sessionFilter;
-    void page;
+    void filters.range;
+    void filters.routeFilter;
+    void filters.modelFilter;
+    void filters.vkFilter;
+    void filters.sessionFilter;
+    void filters.page;
     loadRequests();
   });
 
   function refresh() {
-    const next = refreshRange(range);
-    if (next === range) loadRequests();
-    else range = next;
+    if (filters.activePresetKey === "custom") loadRequests();
+    else filters.range = presetRangeForKey(filters.activePresetKey);
   }
 
   async function openDetail(id: number) {
@@ -235,7 +228,7 @@
     <h2>Requests</h2>
     <div class="toolbar-controls">
       <RefreshControl onRefresh={refresh} loading={requestsLoading} />
-      <TimeRangePicker bind:value={range} />
+      <TimeRangePicker bind:value={filters.range} bind:activeKey={filters.activePresetKey} />
     </div>
   </div>
 
@@ -243,25 +236,25 @@
     <div class="field">
       <label for="f-route">Route</label>
       <Dropdown
-        bind:value={routeFilter}
+        bind:value={filters.routeFilter}
         options={[{ value: "", label: "All routes" }, ...routes.map((r) => ({ value: r.name, label: r.name }))]}
       />
     </div>
     <div class="field">
       <label for="f-model">Model</label>
       <Dropdown
-        bind:value={modelFilter}
+        bind:value={filters.modelFilter}
         options={[{ value: "", label: "All models" }, ...models.map((m) => ({ value: m, label: m }))]}
       />
     </div>
     <div class="field">
       <label for="f-vk">Virtual key</label>
-      <Dropdown bind:value={vkFilter} options={[{ value: "", label: "All keys" }, ...vks.map((v) => ({ value: v, label: v }))]} />
+      <Dropdown bind:value={filters.vkFilter} options={[{ value: "", label: "All keys" }, ...vks.map((v) => ({ value: v, label: v }))]} />
     </div>
     <div class="field">
       <label for="f-session">Session</label>
       <Dropdown
-        bind:value={sessionFilter}
+        bind:value={filters.sessionFilter}
         options={[{ value: "", label: "All sessions" }, ...sessions.map((s) => ({ value: s, label: s }))]}
       />
     </div>
@@ -299,9 +292,9 @@
     </Table>
 
     <div class="pagination">
-      <Button variant="ghost" disabled={page === 0} onclick={() => (page -= 1)}>Prev</Button>
-      <span class="page-info num">Page {page + 1} of {pageCount}</span>
-      <Button variant="ghost" disabled={(page + 1) * limit >= total} onclick={() => (page += 1)}>Next</Button>
+      <Button variant="ghost" disabled={filters.page === 0} onclick={() => (filters.page -= 1)}>Prev</Button>
+      <span class="page-info num">Page {filters.page + 1} of {pageCount}</span>
+      <Button variant="ghost" disabled={(filters.page + 1) * limit >= total} onclick={() => (filters.page += 1)}>Next</Button>
     </div>
   </Card>
 </div>
