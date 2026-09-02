@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use tollgate::shutdown::{drain_with_timeout, normalize_listen};
-use tollgate::{config, gateway, store};
+use tollgate::shutdown::{drain_with_timeout, normalize_listen, ShutdownHandle};
+use tollgate::{config, gateway, mdns, store, tls};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 
@@ -50,27 +50,58 @@ async fn main() -> anyhow::Result<()> {
     let gw = gateway::Gateway::new(&cfg, store.clone())?;
 
     let listener = tokio::net::TcpListener::bind(normalize_listen(&cfg.listen)).await?;
-    tracing::info!(listen = %cfg.listen, "gateway listening");
+    let port = listener.local_addr()?.port();
+    let router = gateway::router(gw.clone());
+
+    let (server_handle, shutdown_handle) = if cfg.tls_enabled {
+        let cert_dir = tls::resolve_cert_dir(&cfg, &args.config);
+        let sans = tls::build_san_list(&cfg.mdns_hostname);
+        let cert = tls::load_or_generate(&cert_dir, &sans)?;
+        let rustls_cfg = tls::rustls_config(&cert).await?;
+        tracing::info!(listen = %cfg.listen, fingerprint = %cert.fingerprint, "gateway listening (https)");
+
+        let handle = axum_server::Handle::new();
+        let server_handle_clone = handle.clone();
+        let std_listener = listener.into_std()?;
+        let jh = tokio::spawn(async move {
+            axum_server::from_tcp_rustls(std_listener, rustls_cfg)?
+                .handle(server_handle_clone)
+                .serve(router.into_make_service())
+                .await
+        });
+        (jh, ShutdownHandle::AxumServer(handle))
+    } else {
+        tracing::info!(listen = %cfg.listen, "gateway listening (http)");
+        let (tx, rx) = oneshot::channel::<()>();
+        let jh = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = rx.await;
+                })
+                .await
+        });
+        (jh, ShutdownHandle::Oneshot(tx))
+    };
+
+    let mdns_handle = mdns::start_advertising(&cfg.mdns_hostname, port).unwrap_or_else(|e| {
+        tracing::warn!("mDNS advertisement failed to start, continuing without it: {e}");
+        None
+    });
 
     let shutdown_timeout = Arc::new(Mutex::new(cfg.shutdown_timeout.clone()));
     spawn_reload_on_sighup(gw.clone(), args.config.clone(), shutdown_timeout.clone());
 
-    let router = gateway::router(gw);
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let server_handle = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-            })
-            .await
-    });
-
     wait_for_shutdown_signal().await;
     tracing::info!("shutdown signal received, no longer accepting new requests");
-    let _ = shutdown_tx.send(());
 
     let timeout = shutdown_timeout.lock().expect("shutdown_timeout mutex poisoned").clone();
+    let parsed_timeout = humantime::parse_duration(&timeout).ok();
+    shutdown_handle.send(parsed_timeout);
     drain_with_timeout(server_handle, &timeout).await?;
+
+    if let Some(m) = mdns_handle {
+        m.stop();
+    }
 
     // The server task (and the Arc<Gateway> it held) is gone once
     // drain_with_timeout returns; this is the last strong reference to

@@ -121,4 +121,8 @@ export interface GatewayStatus {
   config_path: string;
   db_path: string;
   bind_error: string | null;
+  tls_enabled: boolean;
+  https_url: string | null;
+  mdns_url: string | null;
+  tls_fingerprint: string | null;
 }

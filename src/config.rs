@@ -11,6 +11,7 @@ use thiserror::Error;
 pub const DEFAULT_LISTEN: &str = ":8787";
 pub const DEFAULT_DB_PATH: &str = "./tollgate.db";
 pub const DEFAULT_MAX_BODY_BYTES: i64 = 25 * 1024 * 1024;
+pub const DEFAULT_MDNS_HOSTNAME: &str = "tollgate";
 
 /// Must match `identifier` in `app/src-tauri/tauri.conf.json` — this is
 /// what makes [`default_config_path`] resolve to the same file the Tauri
@@ -111,6 +112,39 @@ pub struct Config {
     /// price.
     #[serde(default)]
     pub pricing: HashMap<String, ModelPrice>,
+
+    /// Serve HTTPS with an auto-generated self-signed certificate instead
+    /// of plain HTTP. Defaults to `true` — HTTPS works with no cert setup
+    /// required. The certificate is self-signed, so browsers still show a
+    /// one-time warning; there's no way around that without a real CA.
+    /// Set to `false` to fall back to plain HTTP. Requires a restart.
+    #[serde(default = "default_true")]
+    pub tls_enabled: bool,
+
+    /// Directory holding the auto-generated TLS certificate and key.
+    /// Empty (the default) means "next to the config file" — the same
+    /// per-app config directory the CLI and Tauri app already share.
+    /// Requires a restart.
+    #[serde(default)]
+    pub tls_cert_dir: String,
+
+    /// Hostname advertised via mDNS, without the `.local` suffix (added
+    /// automatically) — e.g. `"tollgate"` advertises `tollgate.local`, so
+    /// the gateway is reachable on the local network without editing
+    /// `/etc/hosts` or configuring DNS. Must be 1-15 bytes, letters/
+    /// digits/hyphens only. Set to `""` explicitly to disable mDNS
+    /// advertisement. Defaults to [`DEFAULT_MDNS_HOSTNAME`] when the field
+    /// is absent from the file entirely. Requires a restart.
+    #[serde(default = "default_mdns_hostname")]
+    pub mdns_hostname: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_mdns_hostname() -> String {
+    DEFAULT_MDNS_HOSTNAME.to_string()
 }
 
 #[derive(Debug, Error)]
@@ -162,7 +196,11 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 /// so first launch has something to build on instead of erroring.
 pub fn load_or_init(path: &Path) -> Result<Config, ConfigError> {
     if !path.exists() {
-        let mut cfg = Config::default();
+        // Deserialize an empty document rather than using `Config::default()`
+        // directly, so field defaults driven by `#[serde(default = "...")]`
+        // (e.g. `tls_enabled`) resolve the same way they would for any other
+        // freshly-written config file, not `bool`/etc.'s plain `Default`.
+        let mut cfg: Config = serde_yaml::from_str("{}")?;
         apply_defaults(&mut cfg);
         save(path, &cfg)?;
         return Ok(cfg);
@@ -195,6 +233,17 @@ pub fn validate_routes(cfg: &Config) -> Result<(), ConfigError> {
                 cfg.shutdown_timeout
             ))
         })?;
+    }
+
+    if !cfg.mdns_hostname.is_empty() {
+        let valid = cfg.mdns_hostname.len() <= 15
+            && cfg.mdns_hostname.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if !valid {
+            return Err(invalid(format!(
+                "mdns_hostname: {:?} must be 1-15 ASCII letters/digits/hyphens (RFC 6763), or empty to disable mDNS",
+                cfg.mdns_hostname
+            )));
+        }
     }
 
     let mut key_owner: HashMap<&str, &str> = HashMap::new();
@@ -426,6 +475,53 @@ mod tests {
     }
 
     #[test]
+    fn mdns_hostname_empty_is_allowed() {
+        let cfg = Config::default();
+        assert!(validate_routes(&cfg).is_ok());
+    }
+
+    #[test]
+    fn mdns_hostname_well_formed_is_accepted() {
+        let cfg = Config {
+            mdns_hostname: "tollgate-2".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_routes(&cfg).is_ok());
+    }
+
+    #[test]
+    fn mdns_hostname_with_dot_is_rejected() {
+        let cfg = Config {
+            mdns_hostname: "toll.gate".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_routes(&cfg).is_err());
+    }
+
+    #[test]
+    fn mdns_hostname_too_long_is_rejected() {
+        let cfg = Config {
+            mdns_hostname: "this-name-is-too-long".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_routes(&cfg).is_err());
+    }
+
+    #[test]
+    fn tls_enabled_and_mdns_hostname_default_true_when_field_absent_from_yaml() {
+        let cfg: Config = serde_yaml::from_str("{}").unwrap();
+        assert!(cfg.tls_enabled);
+        assert_eq!(cfg.mdns_hostname, DEFAULT_MDNS_HOSTNAME);
+    }
+
+    #[test]
+    fn tls_enabled_and_mdns_hostname_honor_explicit_yaml_overrides() {
+        let cfg: Config = serde_yaml::from_str("tls_enabled: false\nmdns_hostname: \"\"\n").unwrap();
+        assert!(!cfg.tls_enabled);
+        assert_eq!(cfg.mdns_hostname, "");
+    }
+
+    #[test]
     fn default_config_path_ends_with_app_id_and_filename() {
         let path = default_config_path();
         assert_eq!(path.file_name().unwrap(), "config.yaml");
@@ -482,11 +578,17 @@ pricing:
         assert_eq!(cfg.listen, DEFAULT_LISTEN);
         assert!(cfg.routes.is_empty());
         assert!(path.exists());
+        // HTTPS and mDNS should be on by default for a brand-new install,
+        // not silently disabled by Config::default()'s plain bool::default().
+        assert!(cfg.tls_enabled);
+        assert_eq!(cfg.mdns_hostname, DEFAULT_MDNS_HOSTNAME);
 
         // Second call reads back what was just written, unchanged.
         let reread = load_or_init(&path).unwrap();
         assert_eq!(reread.listen, cfg.listen);
         assert!(reread.routes.is_empty());
+        assert!(reread.tls_enabled);
+        assert_eq!(reread.mdns_hostname, DEFAULT_MDNS_HOSTNAME);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

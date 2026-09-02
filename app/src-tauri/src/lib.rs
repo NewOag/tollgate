@@ -9,7 +9,8 @@ mod tray;
 
 use std::sync::{Arc, Mutex};
 
-use tollgate::{config, gateway, shutdown, store};
+use tollgate::shutdown::ShutdownHandle;
+use tollgate::{config, gateway, mdns, shutdown, store, tls};
 use state::AppState;
 use tauri::Manager;
 use tokio::sync::oneshot;
@@ -44,27 +45,87 @@ pub fn run() {
             let bind_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
             let bind_error_task = bind_error.clone();
 
-            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-            let tokio_handle = tauri::async_runtime::handle().inner().clone();
-            let server_handle = tokio_handle.spawn(async move {
-                let listener = match tokio::net::TcpListener::bind(&listen).await {
-                    Ok(l) => l,
+            // Cert generation/loading is blocking file I/O but not async,
+            // so it can run directly here rather than inside the spawned
+            // task below — that keeps `AppState` (which needs the
+            // fingerprint and a ShutdownHandle right away) fully built
+            // before `app.manage(...)`.
+            let tls_cert = if cfg.tls_enabled {
+                let cert_dir = tls::resolve_cert_dir(&cfg, &config_path);
+                let sans = tls::build_san_list(&cfg.mdns_hostname);
+                match tls::load_or_generate(&cert_dir, &sans) {
+                    Ok(c) => Some(c),
                     Err(e) => {
-                        let msg = format!("failed to bind {listen}: {e}");
-                        tracing::error!("{msg}");
-                        *bind_error_task.lock().expect("bind_error mutex poisoned") = Some(msg);
-                        return Ok(());
+                        tracing::error!("TLS cert error, falling back to HTTP: {e}");
+                        None
                     }
-                };
-                tracing::info!(listen = %listen, "gateway listening");
-                axum::serve(listener, router)
-                    .with_graceful_shutdown(async move {
-                        let _ = shutdown_rx.await;
-                    })
-                    .await
+                }
+            } else {
+                None
+            };
+            let tls_fingerprint = tls_cert.as_ref().map(|c| c.fingerprint.clone());
+
+            let tokio_handle = tauri::async_runtime::handle().inner().clone();
+            let (server_handle, shutdown_handle) = if let Some(cert) = tls_cert {
+                let handle = axum_server::Handle::new();
+                let server_handle_clone = handle.clone();
+                let jh = tokio_handle.spawn(async move {
+                    let std_listener = match tokio::net::TcpListener::bind(&listen).await.and_then(|l| l.into_std()) {
+                        Ok(l) => l,
+                        Err(e) => {
+                            let msg = format!("failed to bind {listen}: {e}");
+                            tracing::error!("{msg}");
+                            *bind_error_task.lock().expect("bind_error mutex poisoned") = Some(msg);
+                            return Ok(());
+                        }
+                    };
+                    let rustls_cfg = tls::rustls_config(&cert).await.map_err(std::io::Error::other)?;
+                    tracing::info!(listen = %listen, fingerprint = %cert.fingerprint, "gateway listening (https)");
+                    axum_server::from_tcp_rustls(std_listener, rustls_cfg)?
+                        .handle(server_handle_clone)
+                        .serve(router.into_make_service())
+                        .await
+                });
+                (jh, ShutdownHandle::AxumServer(handle))
+            } else {
+                let (tx, rx) = oneshot::channel::<()>();
+                let jh = tokio_handle.spawn(async move {
+                    let listener = match tokio::net::TcpListener::bind(&listen).await {
+                        Ok(l) => l,
+                        Err(e) => {
+                            let msg = format!("failed to bind {listen}: {e}");
+                            tracing::error!("{msg}");
+                            *bind_error_task.lock().expect("bind_error mutex poisoned") = Some(msg);
+                            return Ok(());
+                        }
+                    };
+                    tracing::info!(listen = %listen, "gateway listening (http)");
+                    axum::serve(listener, router)
+                        .with_graceful_shutdown(async move {
+                            let _ = rx.await;
+                        })
+                        .await
+                });
+                (jh, ShutdownHandle::Oneshot(tx))
+            };
+
+            let mdns_port = shutdown::normalize_listen(&cfg.listen)
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(0);
+            let mdns_handle = mdns::start_advertising(&cfg.mdns_hostname, mdns_port).unwrap_or_else(|e| {
+                tracing::warn!("mDNS advertisement failed to start, continuing without it: {e}");
+                None
             });
 
-            app.manage(AppState::new(gw, store, cfg, config_path, bind_error, shutdown_tx, server_handle));
+            app.manage(AppState::new(
+                gw,
+                store,
+                cfg,
+                config_path,
+                state::ServerHandles { bind_error, shutdown_handle, server_handle, mdns_handle, tls_fingerprint },
+            ));
 
             tray::setup(&app_handle)?;
 

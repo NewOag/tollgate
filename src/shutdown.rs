@@ -3,6 +3,34 @@
 //! to drain in-flight requests, capped by an optional Go-style duration
 //! string ("30s", "1m"; empty means wait indefinitely).
 
+use std::net::SocketAddr;
+
+/// Triggers graceful shutdown of whichever server task is running: plain
+/// `axum::serve` (HTTP) signals via a `oneshot`, TLS via `axum-server`
+/// signals through its own `Handle`. Letting both entrypoints hold one type
+/// regardless of which listener is active keeps the rest of the shutdown
+/// sequence (this module's [`drain_with_timeout`]) identical either way.
+pub enum ShutdownHandle {
+    Oneshot(tokio::sync::oneshot::Sender<()>),
+    AxumServer(axum_server::Handle<SocketAddr>),
+}
+
+impl ShutdownHandle {
+    /// Signals the server to stop accepting new connections and start
+    /// draining in-flight ones. `timeout` is only consulted by the
+    /// `AxumServer` variant (its `Handle` accepts a grace period directly);
+    /// the `Oneshot`/plain-HTTP path relies entirely on the outer
+    /// [`drain_with_timeout`] call for timing out.
+    pub fn send(self, timeout: Option<std::time::Duration>) {
+        match self {
+            Self::Oneshot(tx) => {
+                let _ = tx.send(());
+            }
+            Self::AxumServer(handle) => handle.graceful_shutdown(timeout),
+        }
+    }
+}
+
 /// Waits for `server_handle` to finish draining in-flight requests, capped
 /// at `shutdown_timeout` (read once, at the moment the caller decided to
 /// shut down). Empty means wait indefinitely. An unparseable value is

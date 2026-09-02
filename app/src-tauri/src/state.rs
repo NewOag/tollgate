@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use tollgate::config::{self, Config};
 use tollgate::gateway::Gateway;
+use tollgate::mdns::MdnsHandle;
+use tollgate::shutdown::ShutdownHandle;
 use tollgate::store::Store;
-use tokio::sync::oneshot;
 
 pub struct AppState {
     pub gateway: Arc<Gateway>,
@@ -22,28 +23,41 @@ pub struct AppState {
     pub bind_error: Arc<Mutex<Option<String>>>,
     /// Consumed once, by [`AppState::graceful_shutdown`], to tell the
     /// embedded server to stop accepting new connections.
-    pub shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    pub shutdown_handle: Mutex<Option<ShutdownHandle>>,
     pub server_handle: Mutex<Option<tokio::task::JoinHandle<std::io::Result<()>>>>,
+    /// Consumed once, by [`AppState::graceful_shutdown`], to unregister the
+    /// mDNS advertisement before the process exits. `None` when mDNS is
+    /// disabled or failed to start.
+    pub mdns_handle: Mutex<Option<MdnsHandle>>,
+    /// SHA-256 fingerprint of the self-signed TLS cert, surfaced to the
+    /// frontend so the user can manually verify/trust it. `None` when
+    /// `tls_enabled` is false.
+    pub tls_fingerprint: Option<String>,
+}
+
+/// Everything about the embedded server's running instance, grouped into
+/// one struct purely to keep clippy's `too_many_arguments` happy on
+/// [`AppState::new`] (same rationale as `commands::ListRequestsArgs`).
+pub struct ServerHandles {
+    pub bind_error: Arc<Mutex<Option<String>>>,
+    pub shutdown_handle: ShutdownHandle,
+    pub server_handle: tokio::task::JoinHandle<std::io::Result<()>>,
+    pub mdns_handle: Option<MdnsHandle>,
+    pub tls_fingerprint: Option<String>,
 }
 
 impl AppState {
-    pub fn new(
-        gateway: Arc<Gateway>,
-        store: Arc<Store>,
-        config: Config,
-        config_path: PathBuf,
-        bind_error: Arc<Mutex<Option<String>>>,
-        shutdown_tx: oneshot::Sender<()>,
-        server_handle: tokio::task::JoinHandle<std::io::Result<()>>,
-    ) -> Self {
+    pub fn new(gateway: Arc<Gateway>, store: Arc<Store>, config: Config, config_path: PathBuf, server: ServerHandles) -> Self {
         AppState {
             gateway,
             store,
             config: Mutex::new(config),
             config_path,
-            bind_error,
-            shutdown_tx: Mutex::new(Some(shutdown_tx)),
-            server_handle: Mutex::new(Some(server_handle)),
+            bind_error: server.bind_error,
+            shutdown_handle: Mutex::new(Some(server.shutdown_handle)),
+            server_handle: Mutex::new(Some(server.server_handle)),
+            mdns_handle: Mutex::new(server.mdns_handle),
+            tls_fingerprint: server.tls_fingerprint,
         }
     }
 
@@ -68,16 +82,19 @@ impl AppState {
     /// then closes the store's writer thread. Idempotent — safe to call
     /// more than once, only the first call does anything.
     pub fn graceful_shutdown(&self) {
-        if let Some(tx) = self.shutdown_tx.lock().expect("shutdown_tx mutex poisoned").take() {
-            let _ = tx.send(());
+        let timeout = self.config.lock().expect("config mutex poisoned").shutdown_timeout.clone();
+        if let Some(shutdown_handle) = self.shutdown_handle.lock().expect("shutdown_handle mutex poisoned").take() {
+            shutdown_handle.send(humantime::parse_duration(&timeout).ok());
         }
         if let Some(handle) = self.server_handle.lock().expect("server_handle mutex poisoned").take() {
-            let timeout = self.config.lock().expect("config mutex poisoned").shutdown_timeout.clone();
             tauri::async_runtime::block_on(async move {
                 if let Err(e) = tollgate::shutdown::drain_with_timeout(handle, &timeout).await {
                     tracing::error!("gateway drain failed: {e}");
                 }
             });
+        }
+        if let Some(mdns) = self.mdns_handle.lock().expect("mdns_handle mutex poisoned").take() {
+            mdns.stop();
         }
         self.store.close();
     }
