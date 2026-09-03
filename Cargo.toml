@@ -3,7 +3,7 @@ members = ["app/src-tauri"]
 
 [package]
 name = "tollgate"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 
 [dependencies]
