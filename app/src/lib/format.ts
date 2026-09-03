@@ -42,7 +42,9 @@ export function statusVariant(statusCode: number): Variant {
 }
 
 export function formatVariant(format: string): Variant {
-  return format === "anthropic" ? "accent" : "success";
+  if (format === "anthropic") return "accent";
+  if (format === "openai_responses") return "muted";
+  return "success";
 }
 
 export function maskSecret(value: string): string {

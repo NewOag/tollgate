@@ -58,7 +58,7 @@
 Do not hand-edit it — this desktop app rewrites the whole file on save, so hand-edits can be lost. Instead use the \`tollgate\` CLI, the same binary that runs the gateway: run it with no --config flag and it manages the same file this app uses.
 
 Available commands:
-  tollgate routes add --name <name> --format openai|anthropic --upstream <url>
+  tollgate routes add --name <name> --format openai|anthropic|openai_responses --upstream <url>
   tollgate routes list
   tollgate routes remove --name <name>
 

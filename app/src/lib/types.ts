@@ -15,7 +15,7 @@ export interface KeyEntry {
 
 export interface Route {
   name: string;
-  format: "openai" | "anthropic" | string;
+  format: "openai" | "anthropic" | "openai_responses" | string;
   upstream: string;
   real_keys: RealKeyEntry[];
   keys: KeyEntry[];

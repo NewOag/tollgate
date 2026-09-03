@@ -12,6 +12,12 @@ function extractDeltaText(obj: any, format: string): string | null {
     }
     return null;
   }
+  if (format === "openai_responses") {
+    if (obj?.type === "response.output_text.delta" && typeof obj.delta === "string") {
+      return obj.delta;
+    }
+    return null;
+  }
   // OpenAI-style (and anything else that follows the same `choices[].delta`
   // shape, since most OpenAI-compatible providers do).
   const delta = obj?.choices?.[0]?.delta;

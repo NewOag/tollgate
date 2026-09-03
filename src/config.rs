@@ -57,7 +57,7 @@ pub struct KeyEntry {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Route {
     pub name: String,
-    /// "openai" or "anthropic".
+    /// "openai", "anthropic", or "openai_responses" (OpenAI's `/v1/responses` API).
     pub format: String,
     pub upstream: String,
     #[serde(default)]
@@ -251,9 +251,9 @@ pub fn validate_routes(cfg: &Config) -> Result<(), ConfigError> {
         if r.name.is_empty() {
             return Err(invalid("route: name is required"));
         }
-        if r.format != "openai" && r.format != "anthropic" {
+        if !matches!(r.format.as_str(), "openai" | "anthropic" | "openai_responses") {
             return Err(invalid(format!(
-                "route {:?}: format must be \"openai\" or \"anthropic\", got {:?}",
+                "route {:?}: format must be \"openai\", \"anthropic\", or \"openai_responses\", got {:?}",
                 r.name, r.format
             )));
         }
@@ -378,6 +378,17 @@ mod tests {
             ..Default::default()
         };
         assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn validate_accepts_openai_responses_format() {
+        let mut r = route("r1");
+        r.format = "openai_responses".to_string();
+        let cfg = Config {
+            routes: vec![r],
+            ..Default::default()
+        };
+        assert!(validate(&cfg).is_ok());
     }
 
     #[test]

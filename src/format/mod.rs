@@ -5,10 +5,12 @@
 
 mod anthropic;
 mod openai;
+mod openai_responses;
 mod sse;
 
 pub use anthropic::AnthropicAdapter;
 pub use openai::OpenAIAdapter;
+pub use openai_responses::OpenAIResponsesAdapter;
 
 use serde::Deserialize;
 
@@ -63,6 +65,7 @@ pub fn adapter_for(format: &str) -> Option<Box<dyn Adapter>> {
     match format {
         "openai" => Some(Box::new(OpenAIAdapter)),
         "anthropic" => Some(Box::new(AnthropicAdapter)),
+        "openai_responses" => Some(Box::new(OpenAIResponsesAdapter)),
         _ => None,
     }
 }

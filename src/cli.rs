@@ -42,7 +42,7 @@ pub enum RoutesCommand {
 pub struct RoutesAddArgs {
     #[arg(long)]
     name: String,
-    /// "openai" or "anthropic".
+    /// "openai", "anthropic", or "openai_responses".
     #[arg(long)]
     format: String,
     #[arg(long)]
