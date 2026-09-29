@@ -155,6 +155,7 @@ pub fn run() {
             commands::list_distinct_virtual_key_labels,
             commands::list_distinct_session_ids,
             commands::get_gateway_status,
+            commands::clear_requests,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

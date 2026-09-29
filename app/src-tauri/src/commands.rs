@@ -208,6 +208,14 @@ pub async fn list_distinct_session_ids(state: State<'_, AppState>) -> Result<Vec
     .map_err(to_err)?
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn clear_requests(state: State<'_, AppState>) -> Result<(), String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.clear().map_err(to_err))
+        .await
+        .map_err(to_err)?
+}
+
 #[derive(Serialize)]
 pub struct GatewayStatus {
     pub listen_addr: String,

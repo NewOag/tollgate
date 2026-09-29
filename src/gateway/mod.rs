@@ -27,7 +27,9 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::config::{self, Config};
-use crate::format::{self, Adapter};
+use crate::format::{self, convert};
+use crate::format::convert::BodyTransform;
+use crate::format::Adapter;
 use crate::pricing::{self, Table as PricingTable};
 use crate::store::{Record, Store};
 
@@ -216,6 +218,16 @@ fn join_target_url(upstream: &reqwest::Url, path: &str, query: Option<&str>) -> 
     url
 }
 
+/// Determines whether (and in which direction) request/response bodies
+/// must be translated for this route × path pair.
+fn body_transform(route_format: &str, client_path: &str) -> BodyTransform {
+    match (route_format, client_path) {
+        ("responses", "/v1/chat/completions") => BodyTransform::ChatToResponses,
+        ("openai", "/v1/responses") => BodyTransform::ResponsesToChat,
+        _ => BodyTransform::None,
+    }
+}
+
 enum ReadBodyError {
     TooLarge,
     Other(axum::Error),
@@ -301,7 +313,25 @@ async fn handle_proxy(State(gw): State<Arc<Gateway>>, method: Method, uri: Uri, 
     let parsed = rt.adapter.parse_request(&req_body);
     let path = uri.path().to_string();
 
-    let target_url = join_target_url(&rt.upstream, &path, uri.query());
+    let transform = body_transform(&rt.format, &path);
+
+    // Translate the request body and path when the client's protocol doesn't
+    // match the upstream's. The *parsed* model/stream come from the original
+    // client body (so the log always records what the client actually asked
+    // for); only the body forwarded upstream is rewritten.
+    let (upstream_body, upstream_path) = match transform {
+        BodyTransform::ChatToResponses => (
+            convert::chat_request_to_responses(&req_body),
+            convert::chat_path_to_responses(&path).to_string(),
+        ),
+        BodyTransform::ResponsesToChat => (
+            convert::responses_request_to_chat(&req_body),
+            convert::responses_path_to_chat(&path).to_string(),
+        ),
+        BodyTransform::None => (req_body.clone(), path.clone()),
+    };
+
+    let target_url = join_target_url(&rt.upstream, &upstream_path, uri.query());
 
     let mut out_headers = headers.clone();
     remove_hop_by_hop_headers(&mut out_headers);
@@ -312,6 +342,10 @@ async fn handle_proxy(State(gw): State<Arc<Gateway>>, method: Method, uri: Uri, 
     // routing on Host) rightly reject. Removing it lets the HTTP client
     // set the correct Host for target_url itself.
     out_headers.remove("host");
+    // Update Content-Length to match the (possibly rewritten) body.
+    if let Ok(v) = HeaderValue::from_str(&upstream_body.len().to_string()) {
+        out_headers.insert(HeaderName::from_static("content-length"), v);
+    }
 
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(m) => m,
@@ -322,7 +356,7 @@ async fn handle_proxy(State(gw): State<Arc<Gateway>>, method: Method, uri: Uri, 
         .client
         .request(reqwest_method, target_url)
         .headers(out_headers)
-        .body(req_body.clone())
+        .body(upstream_body.clone())
         .send()
         .await
     {
@@ -373,8 +407,19 @@ async fn handle_proxy(State(gw): State<Arc<Gateway>>, method: Method, uri: Uri, 
     tokio::spawn(async move {
         let mut upstream_stream = resp.bytes_stream();
         let mut agg = if is_stream { Some(rt2.adapter.new_stream_aggregator()) } else { None };
+        // When doing SSE conversion we need a separate SSE parser to split
+        // the upstream event boundaries so we can translate each payload.
+        let mut sse_conv_buf = if is_stream && transform != BodyTransform::None {
+            Some(crate::format::convert::SseConvertBuffer::new())
+        } else {
+            None
+        };
         let mut capture = BoundedBuffer::new(max_body.max(0) as usize);
         let mut upstream_err: Option<String> = None;
+
+        // Whether the non-streaming response body needs to be fully buffered
+        // before sending to the client (so we can translate it in one pass).
+        let buffer_for_transform = !is_stream && transform != BodyTransform::None;
 
         while let Some(chunk) = upstream_stream.next().await {
             match chunk {
@@ -382,9 +427,21 @@ async fn handle_proxy(State(gw): State<Arc<Gateway>>, method: Method, uri: Uri, 
                     if let Some(agg) = agg.as_mut() {
                         agg.feed(&bytes);
                     }
-                    capture.write(&bytes);
-                    if tx.send(Ok(bytes)).await.is_err() {
-                        break; // client disconnected
+                    if let Some(sse_buf) = sse_conv_buf.as_mut() {
+                        // Convert each SSE payload and relay the translated bytes.
+                        let translated = sse_buf.feed_and_convert(&bytes, transform);
+                        capture.write(&translated);
+                        if tx.send(Ok(translated)).await.is_err() {
+                            break;
+                        }
+                    } else if buffer_for_transform {
+                        // Buffer only — send to client after translation below.
+                        capture.write(&bytes);
+                    } else {
+                        capture.write(&bytes);
+                        if tx.send(Ok(bytes)).await.is_err() {
+                            break; // client disconnected
+                        }
                     }
                 }
                 Err(e) => {
@@ -395,19 +452,35 @@ async fn handle_proxy(State(gw): State<Arc<Gateway>>, method: Method, uri: Uri, 
             }
         }
 
+        // For non-streaming responses with a body transform, convert the full
+        // buffered body and relay it to the client in one shot.
+        let raw = capture.bytes();
+        let translated_body: Option<Bytes> = if buffer_for_transform && upstream_err.is_none() {
+            let t = match transform {
+                BodyTransform::ChatToResponses => convert::chat_response_to_responses(raw),
+                BodyTransform::ResponsesToChat => convert::responses_response_to_chat(raw),
+                BodyTransform::None => unreachable!(),
+            };
+            let _ = tx.send(Ok(t.clone())).await;
+            Some(t)
+        } else {
+            None
+        };
+
         // response_body always holds the raw bytes actually relayed to
         // the client (SSE frames and all, for streamed responses) — usage
         // is extracted separately, from the aggregator for streamed
         // responses or by parsing the raw body directly otherwise.
-        let raw = capture.bytes();
+        let bytes_for_usage = translated_body.as_deref().unwrap_or(raw);
         let usage = if let Some(agg) = agg {
             agg.finish()
         } else if status.as_u16() < 400 {
-            rt2.adapter.parse_response(raw)
+            rt2.adapter.parse_response(bytes_for_usage)
         } else {
             format::Usage::default()
         };
-        let mut response_body = String::from_utf8_lossy(raw).to_string();
+        let raw_for_log = translated_body.as_deref().unwrap_or(raw);
+        let mut response_body = String::from_utf8_lossy(raw_for_log).to_string();
         if capture.truncated() {
             response_body.push_str(&format!(
                 "\n...[truncated: response body exceeded the {max_body} byte capture limit; the full response was still relayed to the client]"

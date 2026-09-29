@@ -14,6 +14,7 @@ use anyhow::{anyhow, bail, Result};
 use clap::{Args, Subcommand};
 use rand::Rng;
 use tollgate::config::{self, Config, KeyEntry, ModelPrice, RealKeyEntry, Route};
+use tollgate::store::Store;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -29,6 +30,8 @@ pub enum Command {
     /// Manage per-model pricing.
     #[command(subcommand)]
     Pricing(PricingCommand),
+    /// Delete all recorded requests from the local database.
+    ResetDb,
 }
 
 #[derive(Subcommand)]
@@ -163,6 +166,9 @@ pub fn run(command: Command, config_path: &Path) -> Result<()> {
 
 fn run_to(command: Command, config_path: &Path, out: &mut impl Write) -> Result<()> {
     let mut cfg = config::load_or_init(config_path)?;
+    if let Command::ResetDb = command {
+        return reset_db(&cfg, out);
+    }
     dispatch(command, &mut cfg, config_path, out)
 }
 
@@ -180,7 +186,16 @@ fn dispatch(command: Command, cfg: &mut Config, config_path: &Path, out: &mut im
         Command::Pricing(PricingCommand::Add(args)) => pricing_add(cfg, args, config_path, out),
         Command::Pricing(PricingCommand::List) => pricing_list(cfg, out),
         Command::Pricing(PricingCommand::Remove(args)) => pricing_remove(cfg, args, config_path, out),
+        Command::ResetDb => unreachable!("handled in run_to"),
     }
+}
+
+fn reset_db(cfg: &Config, out: &mut impl Write) -> Result<()> {
+    let db_path = if cfg.db_path.is_empty() { config::DEFAULT_DB_PATH } else { &cfg.db_path };
+    let store = Store::open(db_path)?;
+    store.clear()?;
+    writeln!(out, "reset-db: all request records deleted from {db_path:?}")?;
+    Ok(())
 }
 
 fn routes_add(cfg: &mut Config, args: RoutesAddArgs, config_path: &Path, out: &mut impl Write) -> Result<()> {

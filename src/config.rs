@@ -251,9 +251,9 @@ pub fn validate_routes(cfg: &Config) -> Result<(), ConfigError> {
         if r.name.is_empty() {
             return Err(invalid("route: name is required"));
         }
-        if !matches!(r.format.as_str(), "openai" | "anthropic" | "openai_responses") {
+        if !matches!(r.format.as_str(), "openai" | "anthropic" | "openai_responses" | "responses") {
             return Err(invalid(format!(
-                "route {:?}: format must be \"openai\", \"anthropic\", or \"openai_responses\", got {:?}",
+                "route {:?}: format must be \"openai\", \"anthropic\", \"openai_responses\", or \"responses\", got {:?}",
                 r.name, r.format
             )));
         }
@@ -384,6 +384,17 @@ mod tests {
     fn validate_accepts_openai_responses_format() {
         let mut r = route("r1");
         r.format = "openai_responses".to_string();
+        let cfg = Config {
+            routes: vec![r],
+            ..Default::default()
+        };
+        assert!(validate(&cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_responses_format() {
+        let mut r = route("r1");
+        r.format = "responses".to_string();
         let cfg = Config {
             routes: vec![r],
             ..Default::default()

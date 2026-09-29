@@ -110,6 +110,7 @@
         { value: "openai", label: "openai" },
         { value: "anthropic", label: "anthropic" },
         { value: "openai_responses", label: "openai_responses" },
+        { value: "responses", label: "responses" },
       ]}
     />
   </div>

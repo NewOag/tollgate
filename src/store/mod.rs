@@ -268,6 +268,17 @@ impl Store {
         self.read_conn.clone()
     }
 
+    /// Deletes all rows from the `requests` table. Runs synchronously on
+    /// the read connection under its mutex. Any already-queued records in
+    /// the writer thread may land after this returns, so callers that want
+    /// a truly empty database should call [`Store::close`] first and
+    /// reopen the store.
+    pub fn clear(&self) -> rusqlite::Result<()> {
+        let conn = self.read_conn.lock().expect("store read connection mutex poisoned");
+        conn.execute("DELETE FROM requests", [])?;
+        Ok(())
+    }
+
     /// Closes the write channel and waits for the writer thread to drain
     /// every already-queued record. Idempotent — safe to call explicitly
     /// (e.g. before an app-initiated exit) and then again implicitly via
@@ -335,6 +346,27 @@ mod tests {
             .unwrap();
         assert_eq!(req_headers, "");
         assert_eq!(resp_headers, "");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{path}-wal"));
+        let _ = std::fs::remove_file(format!("{path}-shm"));
+    }
+
+    #[test]
+    fn clear_removes_all_rows() {
+        let path = temp_db_path("clear-removes-all-rows");
+        let store = Store::open(&path).unwrap();
+        store.insert(Record { route: "r1".to_string(), ..Default::default() });
+        store.insert(Record { route: "r2".to_string(), ..Default::default() });
+        drop(store); // wait for the writer thread to drain
+
+        let store = Store::open(&path).unwrap();
+        store.clear().unwrap();
+        drop(store);
+
+        let conn = Connection::open(&path).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM requests", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{path}-wal"));

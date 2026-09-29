@@ -4,13 +4,16 @@
 //! call without needing to understand its whole schema.
 
 mod anthropic;
+pub mod convert;
 mod openai;
 mod openai_responses;
+mod responses;
 mod sse;
 
 pub use anthropic::AnthropicAdapter;
 pub use openai::OpenAIAdapter;
 pub use openai_responses::OpenAIResponsesAdapter;
+pub use responses::ResponsesAdapter;
 
 use serde::Deserialize;
 
@@ -66,6 +69,7 @@ pub fn adapter_for(format: &str) -> Option<Box<dyn Adapter>> {
         "openai" => Some(Box::new(OpenAIAdapter)),
         "anthropic" => Some(Box::new(AnthropicAdapter)),
         "openai_responses" => Some(Box::new(OpenAIResponsesAdapter)),
+        "responses" => Some(Box::new(ResponsesAdapter)),
         _ => None,
     }
 }
