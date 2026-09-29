@@ -137,41 +137,7 @@ Ask me what I want to add, change, or remove, then run the appropriate command(s
         <span class="value num">{status?.listen_addr ?? ""}</span>
       </div>
     </div>
-    {#if status?.tls_enabled}
-      {#if status.https_url}
-        <div class="row">
-          <div class="field">
-            <span class="label">HTTPS URL</span>
-            <span class="value num">{status.https_url}</span>
-          </div>
-          <button class="link" onclick={() => status?.https_url && copy(status.https_url)}>Copy</button>
-        </div>
-      {/if}
-      {#if status.mdns_url}
-        <div class="row">
-          <div class="field">
-            <span class="label">mDNS URL (local network)</span>
-            <span class="value num">{status.mdns_url}</span>
-          </div>
-          <button class="link" onclick={() => status?.mdns_url && copy(status.mdns_url)}>Copy</button>
-        </div>
-      {/if}
-      {#if status.tls_fingerprint}
-        <div class="row">
-          <div class="field">
-            <span class="label">TLS cert fingerprint</span>
-            <span class="value num">{status.tls_fingerprint}</span>
-          </div>
-          <button class="link" onclick={() => status?.tls_fingerprint && copy(status.tls_fingerprint)}>Copy</button>
-        </div>
-      {/if}
-      <p class="hint">
-        The certificate is self-signed, so browsers show a one-time security warning the first time you visit — that's
-        expected, not an error. Compare the fingerprint above if you want to confirm it before proceeding. The mDNS URL
-        only resolves from devices on the same local network that support <code>.local</code> hostnames.
-      </p>
-    {/if}
-    <p class="hint">Changing the listen address, TLS, or mDNS settings requires editing the config file by hand and restarting the app.</p>
+    <p class="hint">Changing the listen address requires editing the config file by hand and restarting the app.</p>
     {#if status?.bind_error}
       <p class="error">Bind error: {status.bind_error}</p>
     {/if}

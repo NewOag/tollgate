@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 
 use tollgate::config::{self, Config};
 use tollgate::gateway::Gateway;
-use tollgate::mdns::MdnsHandle;
 use tollgate::shutdown::ShutdownHandle;
 use tollgate::store::Store;
 
@@ -25,25 +24,12 @@ pub struct AppState {
     /// embedded server to stop accepting new connections.
     pub shutdown_handle: Mutex<Option<ShutdownHandle>>,
     pub server_handle: Mutex<Option<tokio::task::JoinHandle<std::io::Result<()>>>>,
-    /// Consumed once, by [`AppState::graceful_shutdown`], to unregister the
-    /// mDNS advertisement before the process exits. `None` when mDNS is
-    /// disabled or failed to start.
-    pub mdns_handle: Mutex<Option<MdnsHandle>>,
-    /// SHA-256 fingerprint of the self-signed TLS cert, surfaced to the
-    /// frontend so the user can manually verify/trust it. `None` when
-    /// `tls_enabled` is false.
-    pub tls_fingerprint: Option<String>,
 }
 
-/// Everything about the embedded server's running instance, grouped into
-/// one struct purely to keep clippy's `too_many_arguments` happy on
-/// [`AppState::new`] (same rationale as `commands::ListRequestsArgs`).
 pub struct ServerHandles {
     pub bind_error: Arc<Mutex<Option<String>>>,
     pub shutdown_handle: ShutdownHandle,
     pub server_handle: tokio::task::JoinHandle<std::io::Result<()>>,
-    pub mdns_handle: Option<MdnsHandle>,
-    pub tls_fingerprint: Option<String>,
 }
 
 impl AppState {
@@ -56,8 +42,6 @@ impl AppState {
             bind_error: server.bind_error,
             shutdown_handle: Mutex::new(Some(server.shutdown_handle)),
             server_handle: Mutex::new(Some(server.server_handle)),
-            mdns_handle: Mutex::new(server.mdns_handle),
-            tls_fingerprint: server.tls_fingerprint,
         }
     }
 
@@ -92,9 +76,6 @@ impl AppState {
                     tracing::error!("gateway drain failed: {e}");
                 }
             });
-        }
-        if let Some(mdns) = self.mdns_handle.lock().expect("mdns_handle mutex poisoned").take() {
-            mdns.stop();
         }
         self.store.close();
     }

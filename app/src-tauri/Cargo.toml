@@ -20,7 +20,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tollgate = { path = "../.." }
 axum = "0.8.9"
-axum-server = { version = "0.8", features = ["tls-rustls"] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }

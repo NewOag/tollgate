@@ -10,8 +10,6 @@
 pub mod config;
 pub mod format;
 pub mod gateway;
-pub mod mdns;
 pub mod pricing;
 pub mod shutdown;
 pub mod store;
-pub mod tls;

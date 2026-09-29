@@ -222,40 +222,15 @@ pub struct GatewayStatus {
     pub config_path: String,
     pub db_path: String,
     pub bind_error: Option<String>,
-    pub tls_enabled: bool,
-    /// `https://localhost:{port}` when TLS is on, for use in a browser or
-    /// client SDK on this machine.
-    pub https_url: Option<String>,
-    /// `https://{mdns_hostname}.local:{port}` when both TLS and mDNS are
-    /// on, for reaching the gateway from elsewhere on the local network.
-    pub mdns_url: Option<String>,
-    /// SHA-256 fingerprint of the self-signed cert, so the user can
-    /// manually verify/trust it in a browser.
-    pub tls_fingerprint: Option<String>,
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn get_gateway_status(state: State<AppState>) -> GatewayStatus {
     let cfg = state.config.lock().expect("config mutex poisoned");
-    let port = cfg.listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok());
-
-    let https_url = match (cfg.tls_enabled, port) {
-        (true, Some(port)) => Some(format!("https://localhost:{port}")),
-        _ => None,
-    };
-    let mdns_url = match (cfg.tls_enabled, port, cfg.mdns_hostname.is_empty()) {
-        (true, Some(port), false) => Some(format!("https://{}.local:{port}", cfg.mdns_hostname)),
-        _ => None,
-    };
-
     GatewayStatus {
         listen_addr: cfg.listen.clone(),
         config_path: state.config_path.to_string_lossy().to_string(),
         db_path: cfg.db_path.clone(),
         bind_error: state.bind_error.lock().expect("bind_error mutex poisoned").clone(),
-        tls_enabled: cfg.tls_enabled,
-        https_url,
-        mdns_url,
-        tls_fingerprint: state.tls_fingerprint.clone(),
     }
 }
